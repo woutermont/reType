@@ -5,10 +5,22 @@ export type Assertion<T> = (value: unknown) => asserts value is T;
 
 export type ReType = Literal | Assertion<unknown> | { [_: PropertyKey]: ReType };
 
-export type Type<R extends ReType> = 
-  R extends { [_: PropertyKey]: ReType } ? { [K in keyof R]: Type<R[K]> } :
+type _Expand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never;
+
+type _Required<R extends { [_: PropertyKey]: ReType }> = {
+  [K in keyof R as undefined extends Type<R[K]> ? never : K]: Type<R[K]>
+};
+
+type _Optional<R extends { [_: PropertyKey]: ReType }> = {
+  [K in keyof R as undefined extends Type<R[K]> ? K : never]?: Type<R[K]>
+};
+
+type _Type<R extends ReType> = 
+  R extends { [_: PropertyKey]: ReType } ? _Required<R> & _Optional<R> :
   R extends Assertion<infer T> ? T : 
   R;
+  
+export type Type<R extends ReType> = _Expand<_Type<R>>;
 
 function isIn<T extends object>(key: PropertyKey, object: T): key is keyof T {
   return key in object;
@@ -20,12 +32,10 @@ export function reType<R extends ReType>(value: unknown, assertion: R): asserts 
     case 'object': if (assertion !== null) {
       if (typeof value !== 'object' || value === null) throw new Error('value is not an object');
       
-      const assertionKeys: (string | symbol)[] = [];
+      const assertionKeys: (string | symbol)[] = [] as const;
       assertionKeys.push(...Object.getOwnPropertyNames(assertion));
       assertionKeys.push(...Object.getOwnPropertySymbols(assertion));
-      assertionKeys.forEach(key => {
-        if (isIn(key, value)) reType(value[key], assertion[key])
-      });
+      assertionKeys.forEach(key => reType(isIn(key, value) ? value[key] : undefined, assertion[key]));
 
       break; 
     }
@@ -44,7 +54,6 @@ export function isType<R extends ReType>(value: unknown, assertion: R): value is
   }
   return value === assertion;
 }
-
 
 export const any: Assertion<any> = () => {};
 export const unknown: Assertion<unknown> = () => {};
@@ -116,4 +125,25 @@ export const union = <Ts extends ReType[]> (...types: Ts): Assertion<Union<Ts>> 
 
 export const optional = <T extends ReType> (pattern: T): Assertion<Union<[T, undefined]>> => {
   return union<[T, undefined]>(pattern, undefined);
+}
+
+export const record = <
+  K extends Assertion<PropertyKey>,
+  V extends ReType
+> (k: K, v: V): Assertion<Record<Type<K>, V>> => {
+  return (value: unknown): asserts value is Record<Type<K>, V> => {
+    if (typeof value !== 'object' || value === null) throw new Error('value is not a record');
+    
+    const keys: (string | symbol)[] = [] as const;
+    keys.push(...Object.getOwnPropertyNames(value));
+    keys.push(...Object.getOwnPropertySymbols(value));
+    keys.forEach(key => {
+      reType(key, k);
+      reType(isIn(key, value) ? value[key] : undefined, v);
+    });
+  }
+}
+
+export const dict = <T extends ReType> (records: T): Assertion<NodeJS.Dict<Type<T>>> => {
+  return record(string, records);
 }
